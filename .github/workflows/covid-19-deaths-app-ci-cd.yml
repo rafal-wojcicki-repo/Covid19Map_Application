@@ -122,7 +122,7 @@ jobs:
           aws s3 cp deploy-bundle.zip "s3://${CODEDEPLOY_ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
           echo "ARTIFACT_KEY=${ARTIFACT_KEY}" >> "$GITHUB_ENV"
 
-      - name: Create and wait for CodeDeploy deployment
+      - name: Create CodeDeploy deployment
         run: |
           set -e
           DEPLOYMENT_ID="$(aws deploy create-deployment \
@@ -132,4 +132,35 @@ jobs:
             --s3-location "bucket=${CODEDEPLOY_ARTIFACT_BUCKET},bundleType=zip,key=${ARTIFACT_KEY}" \
             --query 'deploymentId' --output text)"
           echo "Created deployment: ${DEPLOYMENT_ID}"
+          echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> "$GITHUB_ENV"
+
+      - name: Wait for CodeDeploy deployment
+        run: |
+          set -e
           aws deploy wait deployment-successful --deployment-id "${DEPLOYMENT_ID}"
+
+      - name: Show CodeDeploy failure details
+        if: failure()
+        run: |
+          set +e
+          echo "Deployment ID: ${DEPLOYMENT_ID}"
+          aws deploy get-deployment \
+            --deployment-id "${DEPLOYMENT_ID}" \
+            --query 'deploymentInfo.{status:status,errorInformation:errorInformation,creator:creator,description:description,createTime:createTime,completeTime:completeTime}' \
+            --output table
+
+          echo "Per-instance summary:"
+          aws deploy list-deployment-instances \
+            --deployment-id "${DEPLOYMENT_ID}" \
+            --query 'instancesList' \
+            --output table
+
+          INSTANCE_ID="$(aws deploy list-deployment-instances --deployment-id "${DEPLOYMENT_ID}" --query 'instancesList[0]' --output text 2>/dev/null)"
+          if [ -n "${INSTANCE_ID}" ] && [ "${INSTANCE_ID}" != "None" ]; then
+            echo "First instance diagnostics:"
+            aws deploy get-deployment-instance \
+              --deployment-id "${DEPLOYMENT_ID}" \
+              --instance-id "${INSTANCE_ID}" \
+              --query 'instanceSummary.{instanceId:instanceId,status:status,lastUpdatedAt:lastUpdatedAt,lifecycleEvents:lifecycleEvents}' \
+              --output json
+          fi
