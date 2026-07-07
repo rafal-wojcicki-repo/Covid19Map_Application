@@ -1,31 +1,22 @@
-aws_region         = "eu-central-1"
-project_name       = "covid19map"
-environment        = "dev"
-instance_type      = "t3.micro"
-vpc_cidr           = "10.40.0.0/16"
-public_subnet_cidr = "10.40.1.0/24"
-ssh_port           = 22
+aws_region            = "eu-central-1"
+project_name          = "covid19map"
+environment           = "dev"
+vpc_cidr              = "10.40.0.0/16"
+public_subnet_cidr_a  = "10.40.1.0/24"
+public_subnet_cidr_b  = "10.40.2.0/24"
+app_port              = 8080
+task_cpu              = 256
+task_memory           = 512
+desired_count         = 1
+container_image_tag   = "latest"
 
-# Ogranicz do swojego IP/Bastion/VPN.
-ssh_ingress_cidrs       = []
-allow_insecure_ssh_cidr = false
-
-# Port aplikacji.
-app_port          = 8080
-app_ingress_cidrs = ["0.0.0.0/0"]
-
-app_dir              = "/opt/covid19map"
-systemd_service_name = "covid19map.service"
-create_eip           = true
-artifact_bucket_force_destroy = false
-
-# OIDC subjecty dla GitHub Actions (dopasuj owner/repo, jeśli forkujesz).
 github_oidc_subjects = [
   "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/main",
   "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/master",
   "repo:Bizon15100/Covid19Map_Application:environment:production"
 ]
-# Jeśli masz już provider OIDC w koncie AWS, podaj ARN i Terraform nie będzie tworzył nowego.
+
+# If OIDC provider already exists in AWS account, set it here:
 # github_oidc_provider_arn = "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
 
 tags = {

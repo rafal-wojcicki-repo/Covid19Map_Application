@@ -16,76 +16,52 @@ variable "environment" {
   default     = "dev"
 }
 
-variable "instance_type" {
-  description = "EC2 instance type."
-  type        = string
-  default     = "t3.micro"
-}
-
 variable "vpc_cidr" {
   description = "CIDR block for dedicated VPC."
   type        = string
   default     = "10.40.0.0/16"
 }
 
-variable "public_subnet_cidr" {
-  description = "CIDR block for public subnet."
+variable "public_subnet_cidr_a" {
+  description = "CIDR block for public subnet A."
   type        = string
   default     = "10.40.1.0/24"
 }
 
-variable "ssh_port" {
-  description = "SSH port exposed by EC2."
-  type        = number
-  default     = 22
-}
-
-variable "ssh_ingress_cidrs" {
-  description = "CIDRs allowed to SSH into EC2. Restrict to trusted sources."
-  type        = list(string)
-  default     = []
-}
-
-variable "allow_insecure_ssh_cidr" {
-  description = "Allow 0.0.0.0/0 for SSH ingress. Keep false in production."
-  type        = bool
-  default     = false
+variable "public_subnet_cidr_b" {
+  description = "CIDR block for public subnet B."
+  type        = string
+  default     = "10.40.2.0/24"
 }
 
 variable "app_port" {
-  description = "Application port exposed publicly."
+  description = "Application port exposed by ECS container and target group."
   type        = number
   default     = 8080
 }
 
-variable "app_ingress_cidrs" {
-  description = "CIDRs allowed to access application port."
-  type        = list(string)
-  default     = ["0.0.0.0/0"]
+variable "task_cpu" {
+  description = "ECS task CPU units."
+  type        = number
+  default     = 256
 }
 
-variable "app_dir" {
-  description = "Application directory used by deployment workflow and systemd."
+variable "task_memory" {
+  description = "ECS task memory in MiB."
+  type        = number
+  default     = 512
+}
+
+variable "desired_count" {
+  description = "Desired number of ECS tasks."
+  type        = number
+  default     = 1
+}
+
+variable "container_image_tag" {
+  description = "Default container image tag used by Terraform-created task definition."
   type        = string
-  default     = "/opt/covid19map"
-}
-
-variable "systemd_service_name" {
-  description = "Systemd unit name used by GitHub Actions restart step."
-  type        = string
-  default     = "covid19map.service"
-}
-
-variable "create_eip" {
-  description = "Attach Elastic IP to have stable host for GitHub secret EC2_HOST."
-  type        = bool
-  default     = true
-}
-
-variable "artifact_bucket_force_destroy" {
-  description = "Allow destroying non-empty deployment artifact bucket."
-  type        = bool
-  default     = false
+  default     = "latest"
 }
 
 variable "github_oidc_subjects" {

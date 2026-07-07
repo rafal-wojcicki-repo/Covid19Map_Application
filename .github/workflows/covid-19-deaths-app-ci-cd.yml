@@ -1,4 +1,4 @@
-name: Covid19Map CI/CD (Maven + AWS CodeDeploy)
+name: Covid19Map CI/CD (Docker + ECR + ECS)
 
 on:
   push:
@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       deploy_to_aws:
-        description: "Deploy build artifact to AWS CodeDeploy"
+        description: "Build Docker image, publish to ECR and deploy to ECS"
         required: true
         default: "false"
         type: choice
@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-test:
+  test:
     name: Build and test (Java 11)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -46,17 +46,25 @@ jobs:
       - name: Build and test
         run: mvn -B clean verify
 
-      - name: Upload JAR artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: target/*.jar
-          if-no-files-found: error
-
-  deploy-codedeploy-aws:
-    name: Deploy artifact to AWS via CodeDeploy
+  docker-build:
+    name: Build Docker image
     runs-on: ubuntu-latest
-    needs: build-test
+    needs: test
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Build image
+        run: docker build -t covid19map:ci .
+
+  deploy-ecs-aws:
+    name: Publish image and deploy ECS
+    runs-on: ubuntu-latest
+    needs: [test, docker-build]
     if: >
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
       (github.event_name == 'workflow_dispatch' && inputs.deploy_to_aws == 'true')
@@ -71,36 +79,24 @@ jobs:
     # 1) Secret:
     #    - AWS_ROLE_TO_ASSUME -> output github_actions_role_to_assume z Terraforma.
     # 2) Vars:
-    #    - AWS_REGION -> output github_actions_configuration.vars.AWS_REGION.
-    #    - CODEDEPLOY_APPLICATION_NAME -> output codedeploy_application_name.
-    #    - CODEDEPLOY_DEPLOYMENT_GROUP -> output codedeploy_deployment_group_name.
-    #    - CODEDEPLOY_ARTIFACT_BUCKET -> output codedeploy_artifact_bucket_name.
-    #    - CODEDEPLOY_ARTIFACT_PREFIX -> opcjonalnie, np. covid19map/dev.
+    #    - AWS_REGION -> output github_actions_configuration.vars.AWS_REGION
+    #    - ECR_REPOSITORY_URL -> output ecr_repository_url
+    #    - ECS_CLUSTER_NAME -> output ecs_cluster_name
+    #    - ECS_SERVICE_NAME -> output ecs_service_name
+    #    - ECS_TASK_FAMILY -> output ecs_task_family
+    #    - ECS_CONTAINER_NAME -> output ecs_container_name
     # - Utwórz Environment "production" z required reviewers dla ręcznej akceptacji deployu.
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
-      CODEDEPLOY_APPLICATION_NAME: ${{ vars.CODEDEPLOY_APPLICATION_NAME }}
-      CODEDEPLOY_DEPLOYMENT_GROUP: ${{ vars.CODEDEPLOY_DEPLOYMENT_GROUP }}
-      CODEDEPLOY_ARTIFACT_BUCKET: ${{ vars.CODEDEPLOY_ARTIFACT_BUCKET }}
-      CODEDEPLOY_ARTIFACT_PREFIX: ${{ vars.CODEDEPLOY_ARTIFACT_PREFIX || 'codedeploy' }}
+      ECR_REPOSITORY_URL: ${{ vars.ECR_REPOSITORY_URL }}
+      ECS_CLUSTER_NAME: ${{ vars.ECS_CLUSTER_NAME }}
+      ECS_SERVICE_NAME: ${{ vars.ECS_SERVICE_NAME }}
+      ECS_TASK_FAMILY: ${{ vars.ECS_TASK_FAMILY }}
+      ECS_CONTAINER_NAME: ${{ vars.ECS_CONTAINER_NAME }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
-
-      - name: Download JAR artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-          path: target
-
-      - name: Prepare deployment artifact
-        run: |
-          JAR_PATH="$(ls target/*.jar | head -n 1)"
-          cp "$JAR_PATH" app.jar
-          sed -i 's/\r$//' appspec.yml scripts/*.sh
-          chmod +x scripts/*.sh
-          zip -r deploy-bundle.zip appspec.yml app.jar scripts
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -108,60 +104,65 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_TO_ASSUME }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Validate required CodeDeploy settings
+      - name: Validate required deployment settings
         run: |
           test -n "${{ secrets.AWS_ROLE_TO_ASSUME }}" || (echo "Missing secret AWS_ROLE_TO_ASSUME" && exit 1)
           test -n "$AWS_REGION" || (echo "Missing var AWS_REGION" && exit 1)
-          test -n "$CODEDEPLOY_APPLICATION_NAME" || (echo "Missing var CODEDEPLOY_APPLICATION_NAME" && exit 1)
-          test -n "$CODEDEPLOY_DEPLOYMENT_GROUP" || (echo "Missing var CODEDEPLOY_DEPLOYMENT_GROUP" && exit 1)
-          test -n "$CODEDEPLOY_ARTIFACT_BUCKET" || (echo "Missing var CODEDEPLOY_ARTIFACT_BUCKET" && exit 1)
+          test -n "$ECR_REPOSITORY_URL" || (echo "Missing var ECR_REPOSITORY_URL" && exit 1)
+          test -n "$ECS_CLUSTER_NAME" || (echo "Missing var ECS_CLUSTER_NAME" && exit 1)
+          test -n "$ECS_SERVICE_NAME" || (echo "Missing var ECS_SERVICE_NAME" && exit 1)
+          test -n "$ECS_TASK_FAMILY" || (echo "Missing var ECS_TASK_FAMILY" && exit 1)
+          test -n "$ECS_CONTAINER_NAME" || (echo "Missing var ECS_CONTAINER_NAME" && exit 1)
 
-      - name: Upload bundle to S3
+      - name: Login to Amazon ECR
         run: |
           set -e
-          ARTIFACT_KEY="${CODEDEPLOY_ARTIFACT_PREFIX}/${GITHUB_SHA}.zip"
-          aws s3 cp deploy-bundle.zip "s3://${CODEDEPLOY_ARTIFACT_BUCKET}/${ARTIFACT_KEY}"
-          echo "ARTIFACT_KEY=${ARTIFACT_KEY}" >> "$GITHUB_ENV"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${ECR_REPOSITORY_URL%/*}"
 
-      - name: Create CodeDeploy deployment
+      - name: Build and push Docker image
         run: |
           set -e
-          DEPLOYMENT_ID="$(aws deploy create-deployment \
-            --application-name "$CODEDEPLOY_APPLICATION_NAME" \
-            --deployment-group-name "$CODEDEPLOY_DEPLOYMENT_GROUP" \
-            --description "GitHub Actions deployment ${GITHUB_SHA}" \
-            --s3-location "bucket=${CODEDEPLOY_ARTIFACT_BUCKET},bundleType=zip,key=${ARTIFACT_KEY}" \
-            --query 'deploymentId' --output text)"
-          echo "Created deployment: ${DEPLOYMENT_ID}"
-          echo "DEPLOYMENT_ID=${DEPLOYMENT_ID}" >> "$GITHUB_ENV"
+          IMAGE_SHA_TAG="${ECR_REPOSITORY_URL}:${GITHUB_SHA}"
+          IMAGE_LATEST_TAG="${ECR_REPOSITORY_URL}:latest"
+          docker build -t "${IMAGE_SHA_TAG}" -t "${IMAGE_LATEST_TAG}" .
+          docker push "${IMAGE_SHA_TAG}"
+          docker push "${IMAGE_LATEST_TAG}"
+          echo "IMAGE_SHA_TAG=${IMAGE_SHA_TAG}" >> "$GITHUB_ENV"
 
-      - name: Wait for CodeDeploy deployment
+      - name: Register new task definition revision
         run: |
           set -e
-          aws deploy wait deployment-successful --deployment-id "${DEPLOYMENT_ID}"
+          CURRENT_TASK_DEF_ARN="$(aws ecs describe-services \
+            --cluster "$ECS_CLUSTER_NAME" \
+            --services "$ECS_SERVICE_NAME" \
+            --query 'services[0].taskDefinition' \
+            --output text)"
 
-      - name: Show CodeDeploy failure details
-        if: failure()
+          aws ecs describe-task-definition \
+            --task-definition "$CURRENT_TASK_DEF_ARN" \
+            --query 'taskDefinition' > task-def.json
+
+          jq --arg IMG "${IMAGE_SHA_TAG}" --arg NAME "$ECS_CONTAINER_NAME" '
+            .containerDefinitions |= map(if .name == $NAME then .image = $IMG else . end)
+            | del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy, .deregisteredAt)
+          ' task-def.json > task-def-new.json
+
+          NEW_TASK_DEF_ARN="$(aws ecs register-task-definition \
+            --cli-input-json file://task-def-new.json \
+            --query 'taskDefinition.taskDefinitionArn' \
+            --output text)"
+
+          echo "NEW_TASK_DEF_ARN=${NEW_TASK_DEF_ARN}" >> "$GITHUB_ENV"
+
+      - name: Deploy new task definition to ECS service
         run: |
-          set +e
-          echo "Deployment ID: ${DEPLOYMENT_ID}"
-          aws deploy get-deployment \
-            --deployment-id "${DEPLOYMENT_ID}" \
-            --query 'deploymentInfo.{status:status,errorInformation:errorInformation,creator:creator,description:description,createTime:createTime,completeTime:completeTime}' \
-            --output table
-
-          echo "Per-instance summary:"
-          aws deploy list-deployment-instances \
-            --deployment-id "${DEPLOYMENT_ID}" \
-            --query 'instancesList' \
-            --output table
-
-          INSTANCE_ID="$(aws deploy list-deployment-instances --deployment-id "${DEPLOYMENT_ID}" --query 'instancesList[0]' --output text 2>/dev/null)"
-          if [ -n "${INSTANCE_ID}" ] && [ "${INSTANCE_ID}" != "None" ]; then
-            echo "First instance diagnostics:"
-            aws deploy get-deployment-instance \
-              --deployment-id "${DEPLOYMENT_ID}" \
-              --instance-id "${INSTANCE_ID}" \
-              --query 'instanceSummary.{instanceId:instanceId,status:status,lastUpdatedAt:lastUpdatedAt,lifecycleEvents:lifecycleEvents}' \
-              --output json
-          fi
+          set -e
+          aws ecs update-service \
+            --cluster "$ECS_CLUSTER_NAME" \
+            --service "$ECS_SERVICE_NAME" \
+            --task-definition "$NEW_TASK_DEF_ARN" \
+            --force-new-deployment >/dev/null
+          aws ecs wait services-stable \
+            --cluster "$ECS_CLUSTER_NAME" \
+            --services "$ECS_SERVICE_NAME"

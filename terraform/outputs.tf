@@ -1,51 +1,41 @@
-output "ec2_instance_id" {
-  description = "EC2 instance ID."
-  value       = aws_instance.app.id
+output "alb_dns_name" {
+  description = "Public URL host for the application."
+  value       = aws_lb.app.dns_name
 }
 
-output "ec2_public_ip" {
-  description = "EC2 public IP (Elastic IP if enabled)."
-  value       = var.create_eip ? aws_eip.app[0].public_ip : aws_instance.app.public_ip
+output "application_url" {
+  description = "Public URL of the deployed application."
+  value       = "http://${aws_lb.app.dns_name}"
 }
 
-output "ec2_public_dns" {
-  description = "EC2 public DNS name."
-  value       = aws_instance.app.public_dns
+output "ecr_repository_url" {
+  description = "ECR repository URL used by CI/CD."
+  value       = aws_ecr_repository.app.repository_url
 }
 
-output "ec2_ssh_user" {
-  description = "SSH user for Amazon Linux 2023."
-  value       = "ec2-user"
+output "ecs_cluster_name" {
+  description = "ECS cluster name."
+  value       = aws_ecs_cluster.main.name
 }
 
-output "ec2_ssh_port" {
-  description = "SSH port for GitHub Actions variable EC2_SSH_PORT."
-  value       = var.ssh_port
+output "ecs_service_name" {
+  description = "ECS service name."
+  value       = aws_ecs_service.app.name
 }
 
-output "ec2_app_dir" {
-  description = "Directory for GitHub Actions variable EC2_APP_DIR."
-  value       = var.app_dir
+output "ecs_task_family" {
+  description = "ECS task definition family used by deployment job."
+  value       = aws_ecs_task_definition.app.family
 }
 
-output "ec2_systemd_service" {
-  description = "Systemd service for GitHub Actions variable EC2_SYSTEMD_SERVICE."
-  value       = var.systemd_service_name
+output "ecs_container_name" {
+  description = "Container name in ECS task definition."
+  value       = local.ecs_container_name
 }
 
-output "codedeploy_application_name" {
-  description = "CodeDeploy application name for GitHub Actions variable CODEDEPLOY_APPLICATION_NAME."
-  value       = aws_codedeploy_app.this.name
-}
-
-output "codedeploy_deployment_group_name" {
-  description = "CodeDeploy deployment group name for GitHub Actions variable CODEDEPLOY_DEPLOYMENT_GROUP."
-  value       = aws_codedeploy_deployment_group.this.deployment_group_name
-}
-
-output "codedeploy_artifact_bucket_name" {
-  description = "S3 bucket name for GitHub Actions variable CODEDEPLOY_ARTIFACT_BUCKET."
-  value       = aws_s3_bucket.deploy_artifacts.bucket
+output "cloudwatch_log_group_name" {
+  description = "CloudWatch log group with application logs."
+  value       = aws_cloudwatch_log_group.ecs.name
 }
 
 output "github_actions_role_to_assume" {
@@ -60,11 +50,12 @@ output "github_actions_configuration" {
       AWS_ROLE_TO_ASSUME = aws_iam_role.github_actions_deploy.arn
     }
     vars = {
-      AWS_REGION                  = var.aws_region
-      CODEDEPLOY_APPLICATION_NAME = aws_codedeploy_app.this.name
-      CODEDEPLOY_DEPLOYMENT_GROUP = aws_codedeploy_deployment_group.this.deployment_group_name
-      CODEDEPLOY_ARTIFACT_BUCKET  = aws_s3_bucket.deploy_artifacts.bucket
-      CODEDEPLOY_ARTIFACT_PREFIX  = "${var.project_name}/${var.environment}"
+      AWS_REGION         = var.aws_region
+      ECR_REPOSITORY_URL = aws_ecr_repository.app.repository_url
+      ECS_CLUSTER_NAME   = aws_ecs_cluster.main.name
+      ECS_SERVICE_NAME   = aws_ecs_service.app.name
+      ECS_TASK_FAMILY    = aws_ecs_task_definition.app.family
+      ECS_CONTAINER_NAME = local.ecs_container_name
     }
   }
 }

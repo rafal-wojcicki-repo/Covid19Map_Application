@@ -1,8 +1,11 @@
 locals {
-  name                             = "${var.project_name}-${var.environment}"
-  codedeploy_app_name              = "${local.name}-codedeploy-app"
-  codedeploy_deployment_group_name = "${local.name}-deployment-group"
-  github_oidc_provider_arn         = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
+  name                     = "${var.project_name}-${var.environment}"
+  ecs_cluster_name         = "${local.name}-cluster"
+  ecs_service_name         = "${local.name}-service"
+  ecs_task_family          = "${local.name}-task"
+  ecs_container_name       = "${local.name}-container"
+  ecr_repo_name            = "${local.name}-repo"
+  github_oidc_provider_arn = var.github_oidc_provider_arn != null ? var.github_oidc_provider_arn : aws_iam_openid_connect_provider.github[0].arn
 
   common_tags = merge(
     {
@@ -20,22 +23,11 @@ data "aws_availability_zones" "available" {
 
 data "aws_caller_identity" "current" {}
 
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-2023*-x86_64"]
-  }
-}
-
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
   enable_dns_support   = true
-
-  tags = merge(local.common_tags, { Name = "${local.name}-vpc" })
+  tags                 = merge(local.common_tags, { Name = "${local.name}-vpc" })
 }
 
 resource "aws_internet_gateway" "main" {
@@ -43,13 +35,20 @@ resource "aws_internet_gateway" "main" {
   tags   = merge(local.common_tags, { Name = "${local.name}-igw" })
 }
 
-resource "aws_subnet" "public" {
+resource "aws_subnet" "public_a" {
   vpc_id                  = aws_vpc.main.id
-  cidr_block              = var.public_subnet_cidr
-  map_public_ip_on_launch = true
+  cidr_block              = var.public_subnet_cidr_a
   availability_zone       = data.aws_availability_zones.available.names[0]
+  map_public_ip_on_launch = true
+  tags                    = merge(local.common_tags, { Name = "${local.name}-public-a" })
+}
 
-  tags = merge(local.common_tags, { Name = "${local.name}-public-subnet" })
+resource "aws_subnet" "public_b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = var.public_subnet_cidr_b
+  availability_zone       = data.aws_availability_zones.available.names[1]
+  map_public_ip_on_launch = true
+  tags                    = merge(local.common_tags, { Name = "${local.name}-public-b" })
 }
 
 resource "aws_route_table" "public" {
@@ -63,36 +62,26 @@ resource "aws_route" "default_internet" {
   gateway_id             = aws_internet_gateway.main.id
 }
 
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
+resource "aws_route_table_association" "public_a" {
+  subnet_id      = aws_subnet.public_a.id
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_security_group" "app" {
-  name        = "${local.name}-app-sg"
-  description = "Security group for Covid19Map EC2 instance"
+resource "aws_route_table_association" "public_b" {
+  subnet_id      = aws_subnet.public_b.id
+  route_table_id = aws_route_table.public.id
+}
+
+resource "aws_security_group" "alb" {
+  name        = "${local.name}-alb-sg"
+  description = "ALB security group"
   vpc_id      = aws_vpc.main.id
 
-  dynamic "ingress" {
-    for_each = var.ssh_ingress_cidrs
-    content {
-      from_port   = var.ssh_port
-      to_port     = var.ssh_port
-      protocol    = "tcp"
-      cidr_blocks = [ingress.value]
-      description = "SSH access"
-    }
-  }
-
-  dynamic "ingress" {
-    for_each = var.app_ingress_cidrs
-    content {
-      from_port   = var.app_port
-      to_port     = var.app_port
-      protocol    = "tcp"
-      cidr_blocks = [ingress.value]
-      description = "Application access"
-    }
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
   }
 
   egress {
@@ -100,86 +89,191 @@ resource "aws_security_group" "app" {
     to_port     = 0
     protocol    = "-1"
     cidr_blocks = ["0.0.0.0/0"]
-    description = "All outbound traffic"
   }
 
-  lifecycle {
-    precondition {
-      condition     = var.allow_insecure_ssh_cidr || !contains(var.ssh_ingress_cidrs, "0.0.0.0/0")
-      error_message = "0.0.0.0/0 for SSH is blocked by default. Set allow_insecure_ssh_cidr=true only for temporary use."
-    }
-  }
-
-  tags = merge(local.common_tags, { Name = "${local.name}-app-sg" })
+  tags = merge(local.common_tags, { Name = "${local.name}-alb-sg" })
 }
 
-resource "aws_iam_role" "ec2_ssm" {
-  name = "${local.name}-ec2-ssm-role"
+resource "aws_security_group" "ecs_service" {
+  name        = "${local.name}-ecs-sg"
+  description = "ECS service security group"
+  vpc_id      = aws_vpc.main.id
+
+  ingress {
+    from_port       = var.app_port
+    to_port         = var.app_port
+    protocol        = "tcp"
+    security_groups = [aws_security_group.alb.id]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.name}-ecs-sg" })
+}
+
+resource "aws_ecr_repository" "app" {
+  name                 = local.ecr_repo_name
+  image_tag_mutability = "MUTABLE"
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.name}-ecr" })
+}
+
+resource "aws_cloudwatch_log_group" "ecs" {
+  name              = "/ecs/${local.name}"
+  retention_in_days = 14
+  tags              = merge(local.common_tags, { Name = "${local.name}-logs" })
+}
+
+resource "aws_iam_role" "ecs_task_execution" {
+  name = "${local.name}-ecs-execution-role"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
       Principal = {
-        Service = "ec2.amazonaws.com"
+        Service = "ecs-tasks.amazonaws.com"
       }
       Action = "sts:AssumeRole"
     }]
   })
 
-  tags = merge(local.common_tags, { Name = "${local.name}-ec2-ssm-role" })
+  tags = merge(local.common_tags, { Name = "${local.name}-ecs-execution-role" })
 }
 
-resource "aws_iam_role_policy_attachment" "ssm_core" {
-  role       = aws_iam_role.ec2_ssm.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+resource "aws_iam_role_policy_attachment" "ecs_task_execution_managed" {
+  role       = aws_iam_role.ecs_task_execution.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-resource "aws_iam_role_policy_attachment" "codedeploy_ec2" {
-  role       = aws_iam_role.ec2_ssm.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy"
-}
+resource "aws_iam_role" "ecs_task" {
+  name = "${local.name}-ecs-task-role"
 
-resource "aws_s3_bucket" "deploy_artifacts" {
-  bucket        = "${local.name}-deploy-artifacts-${data.aws_caller_identity.current.account_id}"
-  force_destroy = var.artifact_bucket_force_destroy
-  tags          = merge(local.common_tags, { Name = "${local.name}-deploy-artifacts" })
-}
-
-resource "aws_s3_bucket_versioning" "deploy_artifacts" {
-  bucket = aws_s3_bucket.deploy_artifacts.id
-  versioning_configuration {
-    status = "Enabled"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "deploy_artifacts" {
-  bucket                  = aws_s3_bucket.deploy_artifacts.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_iam_role_policy" "ec2_artifact_read" {
-  name = "${local.name}-ec2-artifact-read"
-  role = aws_iam_role.ec2_ssm.id
-
-  policy = jsonencode({
+  assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Action = [
-        "s3:GetObject",
-        "s3:GetObjectVersion",
-        "s3:ListBucket"
-      ]
-      Resource = [
-        aws_s3_bucket.deploy_artifacts.arn,
-        "${aws_s3_bucket.deploy_artifacts.arn}/*"
-      ]
+      Principal = {
+        Service = "ecs-tasks.amazonaws.com"
+      }
+      Action = "sts:AssumeRole"
     }]
   })
+
+  tags = merge(local.common_tags, { Name = "${local.name}-ecs-task-role" })
+}
+
+resource "aws_ecs_cluster" "main" {
+  name = local.ecs_cluster_name
+  tags = merge(local.common_tags, { Name = "${local.name}-ecs-cluster" })
+}
+
+resource "aws_lb" "app" {
+  name               = substr("${local.name}-alb", 0, 32)
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.alb.id]
+  subnets            = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+  tags               = merge(local.common_tags, { Name = "${local.name}-alb" })
+}
+
+resource "aws_lb_target_group" "app" {
+  name        = substr("${local.name}-tg", 0, 32)
+  port        = var.app_port
+  protocol    = "HTTP"
+  target_type = "ip"
+  vpc_id      = aws_vpc.main.id
+
+  health_check {
+    enabled             = true
+    interval            = 30
+    path                = "/health"
+    protocol            = "HTTP"
+    timeout             = 5
+    healthy_threshold   = 2
+    unhealthy_threshold = 2
+    matcher             = "200"
+  }
+
+  tags = merge(local.common_tags, { Name = "${local.name}-tg" })
+}
+
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.app.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.app.arn
+  }
+}
+
+resource "aws_ecs_task_definition" "app" {
+  family                   = local.ecs_task_family
+  network_mode             = "awsvpc"
+  requires_compatibilities = ["FARGATE"]
+  cpu                      = tostring(var.task_cpu)
+  memory                   = tostring(var.task_memory)
+  execution_role_arn       = aws_iam_role.ecs_task_execution.arn
+  task_role_arn            = aws_iam_role.ecs_task.arn
+
+  container_definitions = jsonencode([
+    {
+      name      = local.ecs_container_name
+      image     = "${aws_ecr_repository.app.repository_url}:${var.container_image_tag}"
+      essential = true
+      portMappings = [
+        {
+          containerPort = var.app_port
+          hostPort      = var.app_port
+          protocol      = "tcp"
+        }
+      ]
+      logConfiguration = {
+        logDriver = "awslogs"
+        options = {
+          awslogs-group         = aws_cloudwatch_log_group.ecs.name
+          awslogs-region        = var.aws_region
+          awslogs-stream-prefix = "app"
+        }
+      }
+    }
+  ])
+
+  tags = merge(local.common_tags, { Name = "${local.name}-task-def" })
+}
+
+resource "aws_ecs_service" "app" {
+  name            = local.ecs_service_name
+  cluster         = aws_ecs_cluster.main.id
+  task_definition = aws_ecs_task_definition.app.arn
+  desired_count   = var.desired_count
+  launch_type     = "FARGATE"
+
+  network_configuration {
+    subnets          = [aws_subnet.public_a.id, aws_subnet.public_b.id]
+    security_groups  = [aws_security_group.ecs_service.id]
+    assign_public_ip = true
+  }
+
+  load_balancer {
+    target_group_arn = aws_lb_target_group.app.arn
+    container_name   = local.ecs_container_name
+    container_port   = var.app_port
+  }
+
+  depends_on = [aws_lb_listener.http]
+  tags       = merge(local.common_tags, { Name = "${local.name}-ecs-service" })
 }
 
 resource "aws_iam_openid_connect_provider" "github" {
@@ -224,176 +318,42 @@ resource "aws_iam_role_policy" "github_actions_deploy" {
       {
         Effect = "Allow"
         Action = [
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:GetObjectVersion",
-          "s3:ListBucket"
+          "ecr:GetAuthorizationToken"
         ]
-        Resource = [
-          aws_s3_bucket.deploy_artifacts.arn,
-          "${aws_s3_bucket.deploy_artifacts.arn}/*"
-        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"
         Action = [
-          "codedeploy:CreateDeployment",
-          "codedeploy:GetDeployment",
-          "codedeploy:GetApplicationRevision",
-          "codedeploy:ListDeploymentInstances",
-          "codedeploy:GetDeploymentInstance",
-          "codedeploy:ListDeployments",
-          "codedeploy:GetDeploymentConfig",
-          "codedeploy:RegisterApplicationRevision"
+          "ecr:BatchCheckLayerAvailability",
+          "ecr:CompleteLayerUpload",
+          "ecr:InitiateLayerUpload",
+          "ecr:PutImage",
+          "ecr:UploadLayerPart",
+          "ecr:BatchGetImage"
+        ]
+        Resource = aws_ecr_repository.app.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ecs:DescribeServices",
+          "ecs:DescribeTaskDefinition",
+          "ecs:RegisterTaskDefinition",
+          "ecs:UpdateService"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:PassRole"
+        ]
+        Resource = [
+          aws_iam_role.ecs_task_execution.arn,
+          aws_iam_role.ecs_task.arn
+        ]
       }
     ]
   })
-}
-
-resource "aws_iam_role" "codedeploy_service" {
-  name = "${local.name}-codedeploy-service-role"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Principal = {
-        Service = "codedeploy.amazonaws.com"
-      }
-      Action = "sts:AssumeRole"
-    }]
-  })
-
-  tags = merge(local.common_tags, { Name = "${local.name}-codedeploy-service-role" })
-}
-
-resource "aws_iam_role_policy_attachment" "codedeploy_service" {
-  role       = aws_iam_role.codedeploy_service.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole"
-}
-
-resource "aws_codedeploy_app" "this" {
-  compute_platform = "Server"
-  name             = local.codedeploy_app_name
-}
-
-resource "aws_codedeploy_deployment_group" "this" {
-  app_name               = aws_codedeploy_app.this.name
-  deployment_group_name  = local.codedeploy_deployment_group_name
-  service_role_arn       = aws_iam_role.codedeploy_service.arn
-  deployment_config_name = "CodeDeployDefault.OneAtATime"
-
-  ec2_tag_filter {
-    key   = "CodeDeployGroup"
-    type  = "KEY_AND_VALUE"
-    value = local.name
-  }
-
-  auto_rollback_configuration {
-    enabled = true
-    events  = ["DEPLOYMENT_FAILURE"]
-  }
-}
-
-resource "aws_iam_instance_profile" "ec2" {
-  name = "${local.name}-ec2-profile"
-  role = aws_iam_role.ec2_ssm.name
-  tags = merge(local.common_tags, { Name = "${local.name}-ec2-profile" })
-}
-
-resource "aws_instance" "app" {
-  ami                         = data.aws_ami.amazon_linux_2023.id
-  instance_type               = var.instance_type
-  subnet_id                   = aws_subnet.public.id
-  vpc_security_group_ids      = [aws_security_group.app.id]
-  iam_instance_profile        = aws_iam_instance_profile.ec2.name
-  associate_public_ip_address = true
-  user_data_replace_on_change = true
-  monitoring                  = true
-
-  metadata_options {
-    http_endpoint = "enabled"
-    http_tokens   = "required"
-  }
-
-  root_block_device {
-    encrypted   = true
-    volume_type = "gp3"
-    volume_size = 16
-  }
-
-  user_data = <<-EOT
-              #!/bin/bash
-              set -e
-              dnf update -y
-              dnf install -y java-11-amazon-corretto-headless ruby wget
-
-              APP_DIR="${var.app_dir}"
-              SERVICE_NAME="${var.systemd_service_name}"
-
-              mkdir -p "$APP_DIR/releases"
-              mkdir -p "$APP_DIR/deployment"
-              chown -R ec2-user:ec2-user "$APP_DIR"
-              touch "$APP_DIR/current.jar"
-              chown ec2-user:ec2-user "$APP_DIR/current.jar"
-
-              mkdir -p /etc/covid19map
-              cat <<'CONFIG_EOF' > /etc/covid19map/deploy.env
-              APP_DIR=${var.app_dir}
-              SERVICE_NAME=${var.systemd_service_name}
-              HEALTHCHECK_URL=http://localhost:${var.app_port}/health
-              CONFIG_EOF
-              chmod 644 /etc/covid19map/deploy.env
-
-              cat <<'SERVICE_EOF' > "/etc/systemd/system/${var.systemd_service_name}"
-              [Unit]
-              Description=Covid19Map Spring Boot Application
-              After=network.target
-
-              [Service]
-              Type=simple
-              User=ec2-user
-              WorkingDirectory=${var.app_dir}
-              ExecStart=/usr/bin/java -jar ${var.app_dir}/current.jar
-              Restart=always
-              RestartSec=5
-              SuccessExitStatus=143
-
-              [Install]
-              WantedBy=multi-user.target
-              SERVICE_EOF
-
-              systemctl daemon-reload
-              systemctl enable "$SERVICE_NAME"
-
-              cd /tmp
-              wget "https://aws-codedeploy-${var.aws_region}.s3.${var.aws_region}.amazonaws.com/latest/install"
-              chmod +x ./install
-              ./install auto
-              systemctl enable codedeploy-agent
-              systemctl start codedeploy-agent
-              EOT
-
-  tags = merge(
-    local.common_tags,
-    {
-      Name            = "${local.name}-ec2"
-      CodeDeployGroup = local.name
-    }
-  )
-
-  depends_on = [
-    aws_iam_role_policy_attachment.ssm_core,
-    aws_iam_role_policy_attachment.codedeploy_ec2,
-    aws_iam_role_policy.ec2_artifact_read
-  ]
-}
-
-resource "aws_eip" "app" {
-  count    = var.create_eip ? 1 : 0
-  domain   = "vpc"
-  instance = aws_instance.app.id
-  tags     = merge(local.common_tags, { Name = "${local.name}-eip" })
 }
