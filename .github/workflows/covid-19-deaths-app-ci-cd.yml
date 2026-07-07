@@ -98,6 +98,7 @@ jobs:
         run: |
           JAR_PATH="$(ls target/*.jar | head -n 1)"
           cp "$JAR_PATH" app.jar
+          sed -i 's/\r$//' appspec.yml scripts/*.sh
           chmod +x scripts/*.sh
           zip -r deploy-bundle.zip appspec.yml app.jar scripts
 

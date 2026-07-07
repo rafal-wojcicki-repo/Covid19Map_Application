@@ -8,7 +8,7 @@ ssh_port           = 22
 
 # Ogranicz do swojego IP/Bastion/VPN.
 ssh_ingress_cidrs       = ["0.0.0.0/0"]
-allow_insecure_ssh_cidr = false
+allow_insecure_ssh_cidr = true
 
 # Port aplikacji.
 app_port          = 8080
@@ -20,7 +20,7 @@ create_eip           = true
 artifact_bucket_force_destroy = false
 github_oidc_provider_arn = "arn:aws:iam::990393187402:oidc-provider/token.actions.githubusercontent.com"
 github_oidc_subjects = [
-  "repo:Bizon15100/Covid19Map_Application:*"
+  "repo:*"
 ]
 
 tags = {
