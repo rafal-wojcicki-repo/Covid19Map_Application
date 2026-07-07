@@ -14,12 +14,11 @@ allow_insecure_ssh_cidr = false
 app_port          = 8080
 app_ingress_cidrs = ["0.0.0.0/0"]
 
-# Wklej zawartość klucza PUBLICZNEGO (nie prywatnego), np. z pliku id_rsa.pub.
-ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIIXObhdurYaIQMDVr3eUNMedwYVEwJXiCtVjIZm14DLg github-actions-deploy"
-
 app_dir              = "/opt/covid19map"
 systemd_service_name = "covid19map.service"
 create_eip           = true
+artifact_bucket_force_destroy = false
+github_oidc_provider_arn = "arn:aws:iam::990393187402:oidc-provider/token.actions.githubusercontent.com"
 
 tags = {
   Owner = "rafal-wojcicki"

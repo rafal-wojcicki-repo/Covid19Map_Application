@@ -43,7 +43,7 @@ variable "ssh_port" {
 variable "ssh_ingress_cidrs" {
   description = "CIDRs allowed to SSH into EC2. Restrict to trusted sources."
   type        = list(string)
-  default     = ["79.184.211.96/32"]
+  default     = []
 }
 
 variable "allow_insecure_ssh_cidr" {
@@ -64,20 +64,6 @@ variable "app_ingress_cidrs" {
   default     = ["0.0.0.0/0"]
 }
 
-variable "ssh_public_key" {
-  description = "Public SSH key content in OpenSSH format (ssh-rsa/ssh-ed25519/ecdsa-...)."
-  type        = string
-  default     = null
-  nullable    = true
-}
-
-variable "ssh_public_key_path" {
-  description = "Optional path to OpenSSH public key file (e.g. ~/.ssh/id_ed25519.pub). Used when ssh_public_key is null."
-  type        = string
-  default     = null
-  nullable    = true
-}
-
 variable "app_dir" {
   description = "Application directory used by deployment workflow and systemd."
   type        = string
@@ -94,6 +80,28 @@ variable "create_eip" {
   description = "Attach Elastic IP to have stable host for GitHub secret EC2_HOST."
   type        = bool
   default     = true
+}
+
+variable "artifact_bucket_force_destroy" {
+  description = "Allow destroying non-empty deployment artifact bucket."
+  type        = bool
+  default     = false
+}
+
+variable "github_oidc_subjects" {
+  description = "Allowed OIDC token subjects for GitHub Actions role assumption."
+  type        = list(string)
+  default = [
+    "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/main",
+    "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/master",
+    "repo:Bizon15100/Covid19Map_Application:environment:production"
+  ]
+}
+
+variable "github_oidc_provider_arn" {
+  description = "Optional existing GitHub OIDC provider ARN. If null, Terraform creates one."
+  type        = string
+  default     = null
 }
 
 variable "tags" {

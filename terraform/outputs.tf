@@ -33,19 +33,38 @@ output "ec2_systemd_service" {
   value       = var.systemd_service_name
 }
 
+output "codedeploy_application_name" {
+  description = "CodeDeploy application name for GitHub Actions variable CODEDEPLOY_APPLICATION_NAME."
+  value       = aws_codedeploy_app.this.name
+}
+
+output "codedeploy_deployment_group_name" {
+  description = "CodeDeploy deployment group name for GitHub Actions variable CODEDEPLOY_DEPLOYMENT_GROUP."
+  value       = aws_codedeploy_deployment_group.this.deployment_group_name
+}
+
+output "codedeploy_artifact_bucket_name" {
+  description = "S3 bucket name for GitHub Actions variable CODEDEPLOY_ARTIFACT_BUCKET."
+  value       = aws_s3_bucket.deploy_artifacts.bucket
+}
+
+output "github_actions_role_to_assume" {
+  description = "IAM role ARN to put in GitHub Actions secret AWS_ROLE_TO_ASSUME."
+  value       = aws_iam_role.github_actions_deploy.arn
+}
+
 output "github_actions_configuration" {
   description = "Values to copy into GitHub Actions secrets/variables."
   value = {
     secrets = {
-      EC2_HOST     = var.create_eip ? aws_eip.app[0].public_ip : aws_instance.app.public_ip
-      EC2_SSH_USER = "ec2-user"
+      AWS_ROLE_TO_ASSUME = aws_iam_role.github_actions_deploy.arn
     }
     vars = {
-      EC2_APP_DIR          = var.app_dir
-      EC2_SYSTEMD_SERVICE  = var.systemd_service_name
-      EC2_SSH_PORT         = tostring(var.ssh_port)
-      APP_HEALTHCHECK_PORT = "8080"
-      APP_HEALTHCHECK_PATH = "/map"
+      AWS_REGION                  = var.aws_region
+      CODEDEPLOY_APPLICATION_NAME = aws_codedeploy_app.this.name
+      CODEDEPLOY_DEPLOYMENT_GROUP = aws_codedeploy_deployment_group.this.deployment_group_name
+      CODEDEPLOY_ARTIFACT_BUCKET  = aws_s3_bucket.deploy_artifacts.bucket
+      CODEDEPLOY_ARTIFACT_PREFIX  = "${var.project_name}/${var.environment}"
     }
   }
 }

@@ -7,24 +7,26 @@ public_subnet_cidr = "10.40.1.0/24"
 ssh_port           = 22
 
 # Ogranicz do swojego IP/Bastion/VPN.
-ssh_ingress_cidrs       = ["79.184.211.96/32"]
+ssh_ingress_cidrs       = []
 allow_insecure_ssh_cidr = false
 
 # Port aplikacji.
 app_port          = 8080
 app_ingress_cidrs = ["0.0.0.0/0"]
 
-# Użyj jednego z wariantów:
-# 1) Treść klucza publicznego OpenSSH:
-# ssh_public_key = "ssh-ed25519 AAAAC3Nza... comment"
-#
-# 2) Ścieżka do pliku .pub:
-ssh_public_key      = null
-ssh_public_key_path = "C:/Users/rafal/.ssh/id_ed25519.pub"
-
 app_dir              = "/opt/covid19map"
 systemd_service_name = "covid19map.service"
 create_eip           = true
+artifact_bucket_force_destroy = false
+
+# OIDC subjecty dla GitHub Actions (dopasuj owner/repo, jeśli forkujesz).
+github_oidc_subjects = [
+  "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/main",
+  "repo:Bizon15100/Covid19Map_Application:ref:refs/heads/master",
+  "repo:Bizon15100/Covid19Map_Application:environment:production"
+]
+# Jeśli masz już provider OIDC w koncie AWS, podaj ARN i Terraform nie będzie tworzył nowego.
+# github_oidc_provider_arn = "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"
 
 tags = {
   Owner = "your-name"
