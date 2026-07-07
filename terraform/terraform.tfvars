@@ -7,7 +7,7 @@ public_subnet_cidr = "10.40.1.0/24"
 ssh_port           = 22
 
 # Ogranicz do swojego IP/Bastion/VPN.
-ssh_ingress_cidrs       = ["79.184.211.96/32"]
+ssh_ingress_cidrs       = ["0.0.0.0/0"]
 allow_insecure_ssh_cidr = false
 
 # Port aplikacji.
