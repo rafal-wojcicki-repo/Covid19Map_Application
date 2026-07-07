@@ -1,0 +1,23 @@
+# IDE / build artifacts
+.idea/
+target/
+
+# Terraform local state and working dir
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/override.tf
+terraform/override.tf.json
+terraform/*_override.tf
+terraform/*_override.tf.json
+
+# Secrets / credentials
+*.pem
+*.key
+.env
+.env.*
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
