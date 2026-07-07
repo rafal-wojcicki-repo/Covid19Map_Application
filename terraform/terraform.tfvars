@@ -19,6 +19,9 @@ systemd_service_name = "covid19map.service"
 create_eip           = true
 artifact_bucket_force_destroy = false
 github_oidc_provider_arn = "arn:aws:iam::990393187402:oidc-provider/token.actions.githubusercontent.com"
+github_oidc_subjects = [
+  "repo:Bizon15100/Covid19Map_Application:*"
+]
 
 tags = {
   Owner = "rafal-wojcicki"
