@@ -1,0 +1,159 @@
+name: Covid19Map CI/CD (Maven + AWS EC2)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      deploy_to_aws:
+        description: "Deploy build artifact to AWS EC2"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build and test (Java 11)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: maven
+
+      - name: Build and test
+        run: mvn -B clean verify
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+          if-no-files-found: error
+
+  deploy-ec2-aws:
+    name: Deploy artifact to AWS EC2 (SSH)
+    runs-on: ubuntu-latest
+    needs: build-test
+    if: >
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')) ||
+      (github.event_name == 'workflow_dispatch' && inputs.deploy_to_aws == 'true')
+    permissions:
+      contents: read
+    timeout-minutes: 20
+    environment:
+      name: production
+
+    # UZUPEŁNIJ w GitHub -> Settings -> Secrets and variables -> Actions:
+    # 1) Secrets:
+    #    - EC2_HOST -> Public IPv4 DNS / Public IPv4 address z AWS Console -> EC2 -> Instances.
+    #    - EC2_SSH_USER -> użytkownik SSH instancji:
+    #         Amazon Linux: ec2-user, Ubuntu: ubuntu.
+    #    - EC2_SSH_PRIVATE_KEY -> prywatny klucz PEM odpowiadający key pair podpiętemu do instancji.
+    #      (Wklej pełną zawartość pliku .pem jako secret).
+    # 2) Vars:
+    #    - EC2_APP_DIR -> katalog aplikacji na serwerze, np. /opt/covid19map.
+    #    - EC2_SYSTEMD_SERVICE -> nazwa usługi systemd, np. covid19map.service
+    #      (sprawdzisz na EC2: systemctl list-unit-files | grep -i covid).
+    #    - EC2_SSH_PORT -> opcjonalnie, domyślnie 22.
+    # - Utwórz Environment "production" z required reviewers dla ręcznej akceptacji deployu.
+    env:
+      EC2_APP_DIR: ${{ vars.EC2_APP_DIR }}
+      EC2_SYSTEMD_SERVICE: ${{ vars.EC2_SYSTEMD_SERVICE }}
+      EC2_SSH_PORT: ${{ vars.EC2_SSH_PORT }}
+      APP_HEALTHCHECK_PATH: ${{ vars.APP_HEALTHCHECK_PATH || '/map' }}
+      APP_HEALTHCHECK_PORT: ${{ vars.APP_HEALTHCHECK_PORT || '8080' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target
+
+      - name: Prepare deployment artifact
+        run: |
+          JAR_PATH="$(ls target/*.jar | head -n 1)"
+          cp "$JAR_PATH" app.jar
+
+      - name: Validate required deployment settings
+        run: |
+          test -n "${{ secrets.EC2_HOST }}" || (echo "Missing secret EC2_HOST" && exit 1)
+          test -n "${{ secrets.EC2_SSH_USER }}" || (echo "Missing secret EC2_SSH_USER" && exit 1)
+          test -n "${{ secrets.EC2_SSH_PRIVATE_KEY }}" || (echo "Missing secret EC2_SSH_PRIVATE_KEY" && exit 1)
+          test -n "$EC2_APP_DIR" || (echo "Missing var EC2_APP_DIR" && exit 1)
+          test -n "$EC2_SYSTEMD_SERVICE" || (echo "Missing var EC2_SYSTEMD_SERVICE" && exit 1)
+
+      - name: Configure SSH
+        run: |
+          set -e
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${EC2_SSH_PORT:-22}" "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy artifact to EC2 (scp)
+        run: |
+          set -e
+          scp -P "${EC2_SSH_PORT:-22}" app.jar "${{ secrets.EC2_SSH_USER }}@${{ secrets.EC2_HOST }}:/tmp/app.jar"
+
+      - name: Deploy, health check and rollback (ssh)
+        run: |
+          set -e
+          ssh -p "${EC2_SSH_PORT:-22}" "${{ secrets.EC2_SSH_USER }}@${{ secrets.EC2_HOST }}" '
+            set -e
+            APP_DIR="${{ env.EC2_APP_DIR }}"
+            SERVICE="${{ env.EC2_SYSTEMD_SERVICE }}"
+            HEALTH_PATH="${{ env.APP_HEALTHCHECK_PATH }}"
+            HEALTH_PORT="${{ env.APP_HEALTHCHECK_PORT }}"
+            RELEASE_JAR="$APP_DIR/releases/app-${{ github.sha }}.jar"
+            PREV_JAR="$(readlink -f "$APP_DIR/current.jar" || true)"
+
+            sudo mkdir -p "$APP_DIR/releases"
+            sudo mv /tmp/app.jar "$RELEASE_JAR"
+            sudo ln -sfn "$RELEASE_JAR" "$APP_DIR/current.jar"
+            sudo systemctl daemon-reload
+            sudo systemctl restart "$SERVICE"
+            sleep 10
+
+            if ! curl -fsS "http://localhost:${HEALTH_PORT}${HEALTH_PATH}" >/dev/null; then
+              echo "Health check failed, starting rollback..."
+              if [ -n "$PREV_JAR" ] && [ -f "$PREV_JAR" ]; then
+                sudo ln -sfn "$PREV_JAR" "$APP_DIR/current.jar"
+                sudo systemctl restart "$SERVICE"
+              fi
+              exit 1
+            fi
+
+            sudo systemctl --no-pager --full status "$SERVICE" | head -n 20
+          '
+
+      - name: Cleanup SSH key material
+        if: always()
+        run: |
+          rm -f ~/.ssh/id_rsa
