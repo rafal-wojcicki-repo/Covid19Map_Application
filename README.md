@@ -71,4 +71,4 @@ Do **not** commit real environment or state files:
 Commit only templates like `terraform/terraform.tfvars.example`.
 
 
-Public URL to app: http://63.185.205.192:8080/map
+Public URL to app: [URL link](http://covid19map-dev-alb-167202307.eu-central-1.elb.amazonaws.com/map)
