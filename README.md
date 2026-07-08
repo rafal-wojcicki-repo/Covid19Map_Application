@@ -59,16 +59,5 @@ Public URL is available from Terraform output:
 Container logs in AWS:
 - CloudWatch log group from output `cloudwatch_log_group_name`.
 
-## Security / sensitive files
-
-Do **not** commit real environment or state files:
-
-- `terraform/terraform.tfvars`
-- `terraform/*.tfstate*`
-- `terraform/.terraform/`
-- `*.pem`, `*.key`, `.env*`
-
-Commit only templates like `terraform/terraform.tfvars.example`.
-
 
 Public URL to app: [URL link](http://covid19map-dev-alb-167202307.eu-central-1.elb.amazonaws.com/map)
