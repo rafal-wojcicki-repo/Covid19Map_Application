@@ -3,6 +3,8 @@ package wojcickirafal.SpringBootMapInit;
 import org.apache.commons.csv.CSVFormat;
 import org.apache.commons.csv.CSVParser;
 import org.apache.commons.csv.CSVRecord;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -14,14 +16,18 @@ import java.util.List;
 @Service
 public class Covid19Parser {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger(Covid19Parser.class);
     private static final String url = "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_" +
             "data/csse_covid_19_time_series/time_series_covid19_deaths_global.csv";
 
     public List<Point> getCovidData() throws IOException {
-        List<Point> points = new ArrayList<>();
         RestTemplate restTemplate = new RestTemplate();
         String values = restTemplate.getForObject(url, String.class);
+        return parseCsv(values);
+    }
 
+    List<Point> parseCsv(String values) throws IOException {
+        List<Point> points = new ArrayList<>();
 
         StringReader stringReader = new StringReader(values);
         CSVParser parse = CSVFormat.DEFAULT.withFirstRecordAsHeader().parse(stringReader);
@@ -33,7 +39,7 @@ public class Covid19Parser {
 
                 points.add(new Point(lat, lon, text));
             } catch (NumberFormatException exception){
-                System.out.println(exception.getLocalizedMessage());
+                LOGGER.warn("Skipping invalid COVID-19 CSV row: {}", exception.getLocalizedMessage());
             }
         }
         return points;
