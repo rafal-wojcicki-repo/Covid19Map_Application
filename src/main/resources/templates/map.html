@@ -21,7 +21,7 @@
 
 <script th:inline="javascript">
 
-    var points = [[${points}]];
+    var points = [[$,{points}]];
 
     let current_datetime = new Date();
     let date = ( current_datetime.getDate() - 1) + "-" + (current_datetime.getMonth() + 1) + "-" + current_datetime.getFullYear()
