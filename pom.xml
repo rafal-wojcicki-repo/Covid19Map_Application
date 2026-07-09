@@ -13,7 +13,7 @@
 
     <groupId>LetsCheck</groupId>
     <artifactId>Covid19Map_Application</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.2-SNAPSHOT</version>
     <name>Covid19Map_Application</name>
     <description>Spring Boot COVID-19 map application</description>
 
