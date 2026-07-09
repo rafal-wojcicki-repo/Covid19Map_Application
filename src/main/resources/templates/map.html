@@ -34,7 +34,7 @@
 
     points.forEach(value => {
         L.marker([value.lat, value.lon]).addTo(map)
-            .bindPopup("Deaths in total: " + value.text + " | " + "Date: " + date + " Zmiana na zaliczenie" )
+            .bindPopup("Deaths in total: " + value.text + " | " + "Date: " + date )
             .openPopup();
     })
 
